@@ -1,18 +1,41 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 export default function Home() {
   const [data, setData] = useState([]);
-  const [signals, setSignals] = useState([]);
-  const [stats, setStats] = useState(null);
+  const [signals, setSignals] = useState({});
+  const [stats, setStats] = useState({});
   const [strategy, setStrategy] = useState('MACD');
   const [error, setError] = useState(null);
   const [lastUpdate, setLastUpdate] = useState(null);
-  const [simulation, setSimulation] = useState({
-    balance: 10000,
-    position: null,
-    entryPrice: null,
-    trades: [],
-    totalPnL: 0,
+  const [allSimulations, setAllSimulations] = useState({
+    MACD: {
+      balance: 10000,
+      trades: [],
+      totalPnL: 0,
+      position: null,
+      entryPrice: null,
+    },
+    RSI: {
+      balance: 10000,
+      trades: [],
+      totalPnL: 0,
+      position: null,
+      entryPrice: null,
+    },
+    MA: {
+      balance: 10000,
+      trades: [],
+      totalPnL: 0,
+      position: null,
+      entryPrice: null,
+    },
+    HYBRID: {
+      balance: 10000,
+      trades: [],
+      totalPnL: 0,
+      position: null,
+      entryPrice: null,
+    },
   });
 
   // Convert UTC to GMT-5 (EST)
@@ -41,84 +64,112 @@ export default function Home() {
     return Math.round((exit - entry) * 10000); // 1 pip = 0.0001
   };
 
-  // Process trading simulation
-  const processSimulation = (signalsData) => {
-    let currentSim = { ...simulation };
-    let newTrades = [];
+  // Process trading simulation for a specific strategy
+  const processSimulation = (signalsData, strategyName) => {
+    let simulation = {
+      balance: 10000,
+      position: null,
+      entryPrice: null,
+      trades: [],
+      totalPnL: 0,
+    };
+
+    if (!signalsData || signalsData.length === 0) return simulation;
 
     // Process signals chronologically (reverse order since newest first)
     const chronologicalSignals = [...signalsData].reverse();
 
-    chronologicalSignals.forEach((item, index) => {
+    chronologicalSignals.forEach((item) => {
       const signal = item.Signal;
       const price = item.USD_EUR;
       const timestamp = item.timestamp;
 
       // Buy signal and no position
-      if (signal === 1 && !currentSim.position) {
-        currentSim.position = 'LONG';
-        currentSim.entryPrice = price;
+      if (signal === 1 && !simulation.position) {
+        simulation.position = 'LONG';
+        simulation.entryPrice = price;
       }
       // Sell signal and have long position
-      else if (signal === -1 && currentSim.position === 'LONG') {
-        const pips = calculatePips(currentSim.entryPrice, price);
+      else if (signal === -1 && simulation.position === 'LONG') {
+        const pips = calculatePips(simulation.entryPrice, price);
         const profit = pips * 1; // $1 per pip for simulation
 
-        newTrades.push({
-          entry: currentSim.entryPrice,
+        simulation.trades.push({
+          entry: simulation.entryPrice,
           exit: price,
           pips: pips,
           profit: profit,
           timestamp: timestamp,
+          strategy: strategyName,
         });
 
-        currentSim.balance += profit;
-        currentSim.totalPnL += profit;
-        currentSim.position = null;
-        currentSim.entryPrice = null;
+        simulation.balance += profit;
+        simulation.totalPnL += profit;
+        simulation.position = null;
+        simulation.entryPrice = null;
       }
     });
 
-    return { ...currentSim, trades: newTrades };
+    return simulation;
+  };
+
+  // Fetch data for all strategies
+  const fetchAllStrategies = async () => {
+    const strategies = ['MACD', 'RSI', 'MA', 'HYBRID'];
+    const newSignals = {};
+    const newStats = {};
+    const newSimulations = {};
+
+    try {
+      // Fetch data (same for all strategies)
+      const resData = await fetch('/api/data');
+      const jsonData = await resData.json();
+      setData(Array.isArray(jsonData) ? jsonData : []);
+
+      // Fetch signals and stats for each strategy
+      for (const strat of strategies) {
+        try {
+          const resSignals = await fetch(`/api/signals?strategy=${strat}`);
+          const jsonSignals = await resSignals.json();
+          newSignals[strat] = Array.isArray(jsonSignals) ? jsonSignals : [];
+
+          const resStats = await fetch(`/api/trades?strategy=${strat}`);
+          const jsonStats = await resStats.json();
+          newStats[strat] = jsonStats.stats || {};
+
+          // Process simulation for this strategy
+          newSimulations[strat] = processSimulation(newSignals[strat], strat);
+        } catch (err) {
+          console.error(`Error fetching ${strat}:`, err);
+          newSignals[strat] = [];
+          newStats[strat] = {};
+          newSimulations[strat] = {
+            balance: 10000,
+            trades: [],
+            totalPnL: 0,
+            position: null,
+            entryPrice: null,
+          };
+        }
+      }
+
+      setSignals(newSignals);
+      setStats(newStats);
+      setAllSimulations(newSimulations);
+      setLastUpdate(new Date());
+      setError(null);
+    } catch (err) {
+      console.error('API fetch failed:', err);
+      setError('Failed to load data from backend.');
+    }
   };
 
   useEffect(() => {
-    const fetchAll = async () => {
-      try {
-        const resData = await fetch('/api/data');
-        const jsonData = await resData.json();
-        setData(Array.isArray(jsonData) ? jsonData : []);
+    fetchAllStrategies();
+  }, []);
 
-        const resSignals = await fetch(`/api/signals?strategy=${strategy}`);
-        const jsonSignals = await resSignals.json();
-        setSignals(Array.isArray(jsonSignals) ? jsonSignals : []);
-
-        const resStats = await fetch(`/api/trades`);
-        const jsonStats = await resStats.json();
-        setStats(jsonStats.stats || {});
-
-        // Process trading simulation
-        if (Array.isArray(jsonSignals) && jsonSignals.length > 0) {
-          const newSimulation = processSimulation(jsonSignals);
-          setSimulation(newSimulation);
-        }
-
-        setLastUpdate(new Date());
-        setError(null);
-      } catch (err) {
-        console.error('API fetch failed:', err);
-        setError('Failed to load data from backend.');
-        setData([]);
-        setSignals([]);
-        setStats({});
-      }
-    };
-
-    fetchAll();
-  }, [strategy]);
-
-  const winTrades = simulation.trades.filter((t) => t.profit > 0).length;
-  const totalTrades = simulation.trades.length;
+  const currentSignals = signals[strategy] || [];
+  const currentStats = stats[strategy] || {};
 
   return (
     <main style={{ padding: 20, position: 'relative' }}>
@@ -162,73 +213,131 @@ export default function Home() {
         </div>
       )}
 
-      {/* Trading Simulation Section */}
+      {/* All Strategies Trading Simulation Comparison */}
       <section style={{ marginTop: 20 }}>
-        <h2>Trading Simulation</h2>
+        <h2>Trading Simulation - All Strategies Comparison</h2>
         <div
           style={{
             background: '#f8f9fa',
             padding: 15,
             borderRadius: 5,
             marginBottom: 10,
+            overflowX: 'auto',
           }}
         >
-          <div
+          <table
             style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-              gap: 15,
+              width: '100%',
+              borderCollapse: 'collapse',
+              minWidth: '800px',
             }}
           >
-            <div>
-              <strong>Balance:</strong> ${simulation.balance.toFixed(2)}
-            </div>
-            <div>
-              <strong>Total P&L:</strong>
-              <span
-                style={{
-                  color: simulation.totalPnL >= 0 ? 'green' : 'red',
-                  marginLeft: 5,
-                }}
-              >
-                ${simulation.totalPnL.toFixed(2)}
-              </span>
-            </div>
-            <div>
-              <strong>Position:</strong> {simulation.position || 'None'}
-            </div>
-            <div>
-              <strong>Trades:</strong> {totalTrades}
-            </div>
-            <div>
-              <strong>Win Rate:</strong>{' '}
-              {totalTrades > 0
-                ? ((winTrades / totalTrades) * 100).toFixed(1)
-                : 0}
-              %
-            </div>
-            <div>
-              <strong>Entry Price:</strong>{' '}
-              {simulation.entryPrice ? simulation.entryPrice.toFixed(4) : 'N/A'}
-            </div>
-          </div>
+            <thead>
+              <tr style={{ borderBottom: '2px solid #ccc' }}>
+                <th
+                  style={{ padding: 10, textAlign: 'left', fontWeight: 'bold' }}
+                >
+                  Strategy
+                </th>
+                <th
+                  style={{ padding: 10, textAlign: 'left', fontWeight: 'bold' }}
+                >
+                  Balance
+                </th>
+                <th
+                  style={{ padding: 10, textAlign: 'left', fontWeight: 'bold' }}
+                >
+                  Total P&L
+                </th>
+                <th
+                  style={{ padding: 10, textAlign: 'left', fontWeight: 'bold' }}
+                >
+                  Position
+                </th>
+                <th
+                  style={{ padding: 10, textAlign: 'left', fontWeight: 'bold' }}
+                >
+                  Trades
+                </th>
+                <th
+                  style={{ padding: 10, textAlign: 'left', fontWeight: 'bold' }}
+                >
+                  Win Rate
+                </th>
+                <th
+                  style={{ padding: 10, textAlign: 'left', fontWeight: 'bold' }}
+                >
+                  Entry Price
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(allSimulations).map(([stratName, sim]) => {
+                const winTrades = sim.trades.filter((t) => t.profit > 0).length;
+                const totalTrades = sim.trades.length;
+                const winRate =
+                  totalTrades > 0
+                    ? ((winTrades / totalTrades) * 100).toFixed(1)
+                    : '0';
+
+                return (
+                  <tr
+                    key={stratName}
+                    style={{
+                      borderBottom: '1px solid #eee',
+                      backgroundColor:
+                        stratName === strategy ? '#e3f2fd' : 'transparent',
+                    }}
+                  >
+                    <td
+                      style={{
+                        padding: 10,
+                        fontWeight: stratName === strategy ? 'bold' : 'normal',
+                      }}
+                    >
+                      {stratName}
+                    </td>
+                    <td style={{ padding: 10 }}>${sim.balance.toFixed(2)}</td>
+                    <td
+                      style={{
+                        padding: 10,
+                        color: sim.totalPnL >= 0 ? 'green' : 'red',
+                        fontWeight: 'bold',
+                      }}
+                    >
+                      ${sim.totalPnL.toFixed(2)}
+                    </td>
+                    <td style={{ padding: 10 }}>{sim.position || 'None'}</td>
+                    <td style={{ padding: 10 }}>{totalTrades}</td>
+                    <td style={{ padding: 10 }}>{winRate}%</td>
+                    <td style={{ padding: 10 }}>
+                      {sim.entryPrice ? sim.entryPrice.toFixed(4) : 'N/A'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </section>
 
       <section style={{ marginTop: 20 }}>
-        <h2>Strategy Stats</h2>
+        <h2>Strategy Stats - {strategy}</h2>
         <div style={{ background: '#f0f0f0', padding: 15, borderRadius: 5 }}>
-          <p>Total Return: {stats?.total_return?.toFixed(2) ?? '–'}x</p>
-          <p>Avg PnL %: {stats?.avg_pnl_pct?.toFixed(2) ?? '–'}%</p>
+          <p>Total Return: {currentStats?.total_return?.toFixed(2) ?? '–'}x</p>
+          <p>Avg PnL %: {currentStats?.avg_pnl_pct?.toFixed(2) ?? '–'}%</p>
           <p>
             Win Rate:{' '}
-            {stats?.win_rate ? (stats.win_rate * 100).toFixed(1) : '–'}%
+            {currentStats?.win_rate
+              ? (currentStats.win_rate * 100).toFixed(1)
+              : '–'}
+            %
           </p>
         </div>
       </section>
 
       <section style={{ marginTop: 20 }}>
-        <h2>Latest Signals (Newest First)</h2>
+        <h2>Latest Signals - {strategy} (Newest First)</h2>
         <div
           style={{
             background: '#f0f0f0',
@@ -237,7 +346,7 @@ export default function Home() {
             overflow: 'auto',
           }}
         >
-          {signals.length > 0 ? (
+          {currentSignals.length > 0 ? (
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid #ccc' }}>
@@ -247,7 +356,7 @@ export default function Home() {
                 </tr>
               </thead>
               <tbody>
-                {signals.slice(0, 10).map((signal, index) => (
+                {currentSignals.slice(0, 10).map((signal, index) => (
                   <tr key={index}>
                     <td style={{ padding: 8 }}>
                       {formatTimestamp(signal.timestamp)}
@@ -314,10 +423,10 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Recent Trades */}
-      {simulation.trades.length > 0 && (
+      {/* Recent Trades for Selected Strategy */}
+      {allSimulations[strategy]?.trades.length > 0 && (
         <section style={{ marginTop: 20 }}>
-          <h2>Recent Trades</h2>
+          <h2>Recent Trades - {strategy}</h2>
           <div
             style={{
               background: '#f0f0f0',
@@ -337,7 +446,7 @@ export default function Home() {
                 </tr>
               </thead>
               <tbody>
-                {simulation.trades
+                {allSimulations[strategy].trades
                   .slice(-10)
                   .reverse()
                   .map((trade, index) => (
