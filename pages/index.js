@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState, useEffect } from 'react';
 
 export default function Home() {
   const [data, setData] = useState([]);
@@ -78,6 +78,8 @@ export default function Home() {
 
     // Process signals chronologically (reverse order since newest first)
     const chronologicalSignals = [...signalsData].reverse();
+    let currentPosition = null;
+    let currentEntryPrice = null;
 
     chronologicalSignals.forEach((item) => {
       const signal = item.Signal;
@@ -85,17 +87,17 @@ export default function Home() {
       const timestamp = item.timestamp;
 
       // Buy signal and no position
-      if (signal === 1 && !simulation.position) {
-        simulation.position = 'LONG';
-        simulation.entryPrice = price;
+      if (signal === 1 && !currentPosition) {
+        currentPosition = 'LONG';
+        currentEntryPrice = price;
       }
       // Sell signal and have long position
-      else if (signal === -1 && simulation.position === 'LONG') {
-        const pips = calculatePips(simulation.entryPrice, price);
+      else if (signal === -1 && currentPosition === 'LONG') {
+        const pips = calculatePips(currentEntryPrice, price);
         const profit = pips * 1; // $1 per pip for simulation
 
         simulation.trades.push({
-          entry: simulation.entryPrice,
+          entry: currentEntryPrice,
           exit: price,
           pips: pips,
           profit: profit,
@@ -105,10 +107,21 @@ export default function Home() {
 
         simulation.balance += profit;
         simulation.totalPnL += profit;
-        simulation.position = null;
-        simulation.entryPrice = null;
+        currentPosition = null;
+        currentEntryPrice = null;
       }
     });
+
+    // Only show position if currently holding AND it makes sense with trade history
+    // If we have 0 completed trades and are holding a position, it means we opened but never closed
+    if (currentPosition && simulation.trades.length === 0) {
+      // Check if latest signal is actually BUY to confirm we should be holding
+      const latestSignal = signalsData[0]?.Signal;
+      if (latestSignal === 1) {
+        simulation.position = currentPosition;
+        simulation.entryPrice = currentEntryPrice;
+      }
+    }
 
     return simulation;
   };
